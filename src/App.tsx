@@ -115,6 +115,11 @@ export default function App() {
               options={[["stretch", "行ごとに引き伸ばし"], ["keep", "比率を保つ"]] as const}
               onChange={(v) => set("mode", v)}
             />
+            <Tabs
+              value={s.align}
+              options={[["left", "左揃え"], ["center", "中央揃え"], ["right", "右揃え"]] as const}
+              onChange={(v) => set("align", v)}
+            />
             <Slider label="行間" value={s.gap} min={0} max={32} unit="px" onChange={(v) => set("gap", v)} />
             <Slider label="回転" value={s.rotation} min={-180} max={180} unit="°" onChange={(v) => set("rotation", v)} />
           </Tile>

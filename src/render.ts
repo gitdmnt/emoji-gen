@@ -2,7 +2,7 @@
 //! in list order (see applyLayers), then rotation and background.
 
 import { fontById, fontSpec, type Font } from "./fonts";
-import { alphaBounds, layoutLines, rotationFit, sharedLineBounds, type Box, type FitMode } from "./layout";
+import { alphaBounds, layoutLines, rotationFit, sharedLineBounds, type Box, type FitMode, type TextAlign } from "./layout";
 import { applyLayers, DEFAULT_LAYERS, paintStops, stackReach, toBytes, type Layer, type Paint } from "./layers";
 import { metalPixels } from "./metal";
 
@@ -11,6 +11,7 @@ export type Settings = {
   font: string;
   size: number;
   mode: FitMode;
+  align: TextAlign;
   /** Gap between lines, in pixels of a 256 canvas. */
   gap: number;
   rotation: number;
@@ -25,6 +26,7 @@ export const DEFAULTS: Settings = {
   font: "noto-sans",
   size: 256,
   mode: "stretch",
+  align: "center",
   gap: 0,
   rotation: 0,
   layers: DEFAULT_LAYERS,
@@ -164,7 +166,7 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
   const boxes = lines.map((l) => l.box
     ? { ...l.box, y: vertical.y, h: vertical.h }
     : { x: 0, y: vertical.y, w: l.width, h: vertical.h });
-  const rects = layoutLines(boxes, size, s.mode, inset, s.gap * unit);
+  const rects = layoutLines(boxes, size, s.mode, inset, s.gap * unit, s.align);
 
   const [, mctx] = canvas2d(size);
   mctx.imageSmoothingQuality = "high";

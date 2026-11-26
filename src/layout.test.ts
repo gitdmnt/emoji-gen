@@ -84,6 +84,19 @@ describe("layoutLines", () => {
     expect(rects[1]!.y).toBeCloseTo(rects[0]!.y + rects[0]!.h);
   });
 
+  test("aligns rows within the centered longest row, including height-limited layouts", () => {
+    const rows = [{ x: 0, y: 0, w: 40, h: 100 }, { x: 0, y: 0, w: 20, h: 100 }];
+    const left = layoutLines(rows, 100, "keep", 5, 4, "left");
+    const center = layoutLines(rows, 100, "keep", 5, 4, "center");
+    const right = layoutLines(rows, 100, "keep", 5, 4, "right");
+    expect(left[0]).toEqual(center[0]);
+    expect(right[0]).toEqual(center[0]);
+    expect(left[1]!.x).toBeCloseTo(left[0]!.x);
+    expect(right[1]!.x + right[1]!.w).toBeCloseTo(right[0]!.x + right[0]!.w);
+    expect(center[1]!.x).toBeCloseTo((left[1]!.x + right[1]!.x) / 2);
+    expect(layoutLines(rows, 100, "stretch", 5, 4, "left")).toEqual(layoutLines(rows, 100, "stretch", 5, 4, "right"));
+  });
+
   test("keep is height-limited for many short lines", () => {
     const rects = layoutLines([{ x: 0, y: 0, w: 10, h: 10 }, { x: 0, y: 0, w: 10, h: 10 }], 100, "keep");
     expect(rects.map((r) => r.h)).toEqual([50, 50]);

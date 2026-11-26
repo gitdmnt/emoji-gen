@@ -89,3 +89,47 @@ describe("whitespace rendering", () => {
     });
   }
 });
+
+test("alignment is saved, restored, and reflected in canvas and PNG with whitespace", async () => {
+  await page.evaluate(() => localStorage.setItem("emoji-gen:v3", JSON.stringify({ text: "MMMM\n M　", mode: "keep" })));
+  await page.reload();
+  await page.evaluate(() => document.fonts.ready);
+  const centerTab = page.getByRole("tab", { name: "中央揃え" });
+  await expect(centerTab.getAttribute("aria-selected")).resolves.toBe("true");
+  const bounds = async () => page.locator(".stage canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const { width, height } = canvas;
+    const pixels = canvas.getContext("2d")!.getImageData(0, 0, width, height).data;
+    const rows = [[], []] as number[][];
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (pixels[(y * width + x) * 4 + 3]) rows[y < height / 2 ? 0 : 1]!.push(x);
+    }
+    return rows.map((xs) => [Math.min(...xs), Math.max(...xs)]);
+  });
+  const center = await bounds();
+  await page.getByRole("tab", { name: "左揃え" }).click();
+  const left = await bounds();
+  await page.getByRole("tab", { name: "右揃え" }).click();
+  const right = await bounds();
+  expect(left[0]).toEqual(center[0]);
+  expect(right[0]).toEqual(center[0]);
+  expect(left[1]![0]!).toBeLessThan(center[1]![0]!);
+  expect(right[1]![0]!).toBeGreaterThan(center[1]![0]!);
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "右揃え" }).getAttribute("aria-selected")).resolves.toBe("true");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("emoji-gen:v3")!).align)).toBe("right");
+  await page.waitForFunction(() => document.querySelector<HTMLAnchorElement>("a[download]")?.href.startsWith("blob:"));
+  expect(await page.evaluate(async () => {
+    const canvas = document.querySelector<HTMLCanvasElement>(".stage canvas")!;
+    const link = document.querySelector<HTMLAnchorElement>("a[download]")!;
+    if (!link.href.startsWith("blob:")) return false;
+    const image = new Image();
+    image.src = link.href;
+    await image.decode();
+    const copy = document.createElement("canvas");
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext("2d")!;
+    ctx.drawImage(image, 0, 0);
+    const original = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+    return ctx.getImageData(0, 0, copy.width, copy.height).data.every((v, i) => v === original[i]);
+  })).toBe(true);
+});

@@ -4,6 +4,7 @@ export type Box = { x: number; y: number; w: number; h: number };
 
 /** How lines fill the square: `stretch` gives every line a full-width row of equal height, `keep` scales all lines by one factor. */
 export type FitMode = "stretch" | "keep";
+export type TextAlign = "left" | "center" | "right";
 
 /** Tight box of the pixels whose alpha exceeds `threshold` in RGBA `data`, or null when none do. */
 export function alphaBounds(data: Uint8ClampedArray, width: number, height: number, threshold = 8): Box | null {
@@ -35,7 +36,7 @@ export function sharedLineBounds(boxes: Box[]): Box[] {
  * Target rects in a `size` square for lines whose glyph boxes are `boxes`, leaving `inset` on every side
  * (room for outlines) and `gap` between lines.
  */
-export function layoutLines(boxes: Box[], size: number, mode: FitMode, inset = 0, gap = 0): Box[] {
+export function layoutLines(boxes: Box[], size: number, mode: FitMode, inset = 0, gap = 0, align: TextAlign = "center"): Box[] {
   const n = boxes.length;
   if (n === 0) return [];
   const inner = size - 2 * inset;
@@ -47,10 +48,13 @@ export function layoutLines(boxes: Box[], size: number, mode: FitMode, inset = 0
   const maxW = Math.max(...boxes.map((b) => b.w));
   const sumH = boxes.reduce((s, b) => s + b.h, 0);
   const scale = Math.min(inner / maxW, free / sumH);
+  const blockW = maxW * scale;
+  const blockX = inset + (inner - blockW) / 2;
   let y = inset + (inner - (scale * sumH + gap * (n - 1))) / 2;
   return boxes.map((b) => {
     const w = b.w * scale, h = b.h * scale;
-    const rect = { x: inset + (inner - w) / 2, y, w, h };
+    const x = align === "center" ? inset + (inner - w) / 2 : blockX + (align === "right" ? blockW - w : 0);
+    const rect = { x, y, w, h };
     y += h + gap;
     return rect;
   });
