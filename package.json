@@ -1,0 +1,25 @@
+{
+  "name": "emoji-gen",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "bun run build && wrangler dev --port 8787",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "deploy": "bun run typecheck && bun test && bun run build && wrangler deploy",
+    "screenshots": "bun scripts/screenshots.ts"
+  },
+  "dependencies": {
+    "solid-js": "1.9.20"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.5",
+    "playwright": "^1.65.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.4.0",
+    "vite-plugin-solid": "^2.11.17",
+    "wrangler": "^4.168.0"
+  }
+}
