@@ -155,3 +155,27 @@ test("responsive preview does not cover the editor", async () => {
     expect(layout.stageRight).toBeLessThanOrEqual(width);
   }
 });
+
+test("mobile preview stays visible and updates without blocking controls", async () => {
+  for (const width of [280, 320, 390]) {
+    await page.setViewportSize({ width, height: 700 });
+    const preview = page.locator(".mobile-preview img");
+    await page.waitForFunction(() => document.querySelector<HTMLImageElement>(".mobile-preview img")?.src.startsWith("blob:"));
+    const before = await preview.getAttribute("src");
+    const textarea = page.locator("textarea");
+    await textarea.fill(`Preview ${width}`);
+    await page.waitForFunction((src) => document.querySelector<HTMLImageElement>(".mobile-preview img")?.getAttribute("src") !== src, before);
+    await page.getByRole("tab", { name: "右揃え" }).click();
+    const layout = await page.evaluate(() => {
+      const preview = document.querySelector(".mobile-preview")!.getBoundingClientRect();
+      const header = document.querySelector("header")!.getBoundingClientRect();
+      return { top: preview.top, right: preview.right, headerBottom: header.bottom, scrollY: window.scrollY };
+    });
+    expect(layout.top).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(width);
+    expect(layout.headerBottom).toBeLessThan(700);
+    expect(layout.scrollY).toBeGreaterThan(0);
+  }
+  await page.setViewportSize({ width: 1280, height: 700 });
+  expect(await page.locator(".mobile-preview").isVisible()).toBe(false);
+});

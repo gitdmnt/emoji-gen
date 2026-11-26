@@ -81,6 +81,7 @@ export default function App() {
     <>
       <header>
         <h1>emoji-gen</h1>
+        <div class="mobile-preview" aria-hidden="true">{img(64)}</div>
       </header>
       <main>
         <div class="steps">
