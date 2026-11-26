@@ -44,6 +44,21 @@ main {
   padding: 10px 14px 14px;
 }
 
+footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  max-width: 874px;
+  margin: 0 auto;
+  padding: 0 14px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+footer a {
+  color: inherit;
+}
+
 .steps,
 aside {
   display: flex;

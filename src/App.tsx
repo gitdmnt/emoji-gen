@@ -157,6 +157,11 @@ export default function App() {
           </Tile>
         </aside>
       </main>
+      <footer>
+        <span>宇田</span>
+        <a href="https://gitdmnt.github.io/">gitdmnt.github.io</a>
+        <a href="https://twitter.com/41_36_22">twitter@41_36_22</a>
+      </footer>
     </>
   );
 }
