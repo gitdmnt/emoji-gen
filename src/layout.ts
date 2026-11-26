@@ -100,3 +100,21 @@ export function distanceTransform(inside: Uint8Array, width: number, height: num
   }
   return out;
 }
+
+/**
+ * Signed distance from each pixel centre to the edge of the glyphs whose alpha (0 to 1) is at least one half:
+ * negative inside, positive outside, about plus or minus half a pixel next to the edge.
+ */
+export function signedDistance(alpha: Float32Array, width: number, height: number): Float32Array {
+  const inside = new Uint8Array(alpha.length);
+  const outside = new Uint8Array(alpha.length);
+  for (let i = 0; i < alpha.length; i++) {
+    inside[i] = alpha[i]! >= 0.5 ? 1 : 0;
+    outside[i] = 1 - inside[i]!;
+  }
+  const dOut = distanceTransform(inside, width, height);
+  const dIn = distanceTransform(outside, width, height);
+  const sd = new Float32Array(alpha.length);
+  for (let i = 0; i < sd.length; i++) sd[i] = inside[i] ? 0.5 - dIn[i]! : dOut[i]! - 0.5;
+  return sd;
+}

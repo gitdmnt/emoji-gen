@@ -1,24 +1,31 @@
-// Drives the app in headless Chromium, saves screenshots of each feature and checks PNG size and packing.
+// Drives the app in headless Chromium: exercises the layer panel, saves screenshots and checks PNG sizes.
 // Usage: bun scripts/screenshots.ts [url] [outDir]   (CHROMIUM_PATH overrides the browser binary)
-import { mkdirSync } from "node:fs";
-import { chromium, type Page } from "playwright";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chromium, type Locator } from "playwright";
 
 const url = process.argv[2] ?? "http://localhost:8787/";
 const outDir = process.argv[3] ?? "docs/screenshots";
 mkdirSync(outDir, { recursive: true });
+for (const f of readdirSync(outDir)) if (f.endsWith(".png")) rmSync(`${outDir}/${f}`);
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
-const page = await browser.newPage({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 2, acceptDownloads: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2, acceptDownloads: true });
 page.on("pageerror", (e) => console.error("page error:", e.message));
 
-async function settle(p: Page) {
-  await p.evaluate(() => document.fonts.ready);
-  await p.waitForTimeout(600);
+function check(ok: boolean, what: string) {
+  console.log(ok ? "ok  " : "FAIL", what);
+  if (!ok) process.exitCode = 1;
 }
 
-async function tab(name: string) {
-  await page.getByRole("tab", { name, exact: true }).first().click();
+async function settle() {
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(500);
 }
+
+const tile = (title: string) => page.locator("section.tile", { has: page.locator("h2", { hasText: title }) });
+const rows = page.locator(".layers li");
+const tab = (name: string, scope: Locator | typeof page = page) => scope.getByRole("tab", { name, exact: true }).first().click();
+const button = (name: string) => page.locator(".toolbar button", { hasText: name }).first().click();
 
 async function slider(label: string, value: number) {
   await page
@@ -31,32 +38,42 @@ async function slider(label: string, value: number) {
     }, value);
 }
 
-async function color(label: string, hex: string, nth = 0) {
-  const input = page.locator("label.row", { hasText: label }).nth(nth).locator(".hex");
+async function color(label: string, hex: string) {
+  const input = page.locator("label.row", { hasText: label }).first().locator(".hex");
   await input.fill(hex);
   await input.press("Enter");
 }
 
-/** Saves the output stage alone and the whole page. */
-async function shot(name: string) {
-  await settle(page);
+async function blend(label: string) {
+  await page.locator(".props select").selectOption({ label });
+}
+
+async function names(): Promise<string> {
+  return (await rows.locator(".name").allInnerTexts()).join(",");
+}
+
+/** The output stage alone. */
+async function stage(name: string) {
+  await settle();
   await page.locator(".stage").screenshot({ path: `${outDir}/${name}.png` });
 }
 
-/** Box of the opaque pixels in the output canvas, plus whether the corner pixel is transparent. */
-async function canvasInfo() {
-  return page.locator(".stage canvas").evaluate((c: HTMLCanvasElement) => {
-    const ctx = c.getContext("2d")!;
-    const { data, width, height } = ctx.getImageData(0, 0, c.width, c.height);
-    let minX = width, minY = height, maxX = -1, maxY = -1;
-    for (let y = 0; y < height; y++)
-      for (let x = 0; x < width; x++)
-        if (data[(y * width + x) * 4 + 3]! > 8) {
-          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-          minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-        }
-    return { size: width, minX, minY, maxX, maxY, cornerAlpha: data[3] };
-  });
+/** The layer tile beside the preview tile, so settings and result show together. */
+async function panelWithPreview(name: string) {
+  await settle();
+  const a = (await tile("3 layers").boundingBox())!;
+  const b = (await tile("5 preview").boundingBox())!;
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  const w = Math.max(a.x + a.width, b.x + b.width) - x, h = Math.max(a.y + a.height, b.y + b.height) - y;
+  await page.screenshot({ path: `${outDir}/${name}.png`, clip: { x: x - 2, y: y - 2, width: w + 4, height: h + 4 } });
+}
+
+/** RGBA of the output canvas at (x, y) in 256 space. */
+async function pixel(x: number, y: number): Promise<number[]> {
+  return page.locator(".stage canvas").evaluate((c: HTMLCanvasElement, [x, y]) => {
+    const k = c.width / 256;
+    return [...c.getContext("2d")!.getImageData(Math.floor(x! * k), Math.floor(y! * k), 1, 1).data];
+  }, [x, y]);
 }
 
 async function downloadSize(): Promise<number> {
@@ -71,84 +88,103 @@ async function downloadSize(): Promise<number> {
 await page.goto(url);
 await page.evaluate(() => localStorage.clear());
 await page.reload();
+await settle();
+await page.screenshot({ path: `${outDir}/01-full-page.png`, fullPage: true });
+await tile("3 layers").screenshot({ path: `${outDir}/02-layer-panel.png` });
+await tile("5 preview").screenshot({ path: `${outDir}/03-preview-light-dark.png` });
+check((await names()) === "塗り,縁取り,縁取り,背景", "default stack is fill over two strokes");
+
+// List operations on the default stack.
+await rows.nth(1).click();
+await button("複製");
+check((await names()) === "塗り,縁取り,縁取り,縁取り,背景", "duplicate adds a copy above the selected layer");
+await button("削除");
+check((await names()) === "塗り,縁取り,縁取り,背景", "delete removes the selected layer");
+await rows.nth(0).click();
+await button("↓");
+check((await names()) === "縁取り,塗り,縁取り,背景", "move down sends the fill behind the first stroke");
+const behind = await pixel(128, 128);
+await rows.nth(1).dragTo(rows.nth(0));
+check((await names()) === "塗り,縁取り,縁取り,背景", "dragging a row moves it to the drop target");
+await settle();
+check(JSON.stringify(await pixel(128, 128)) !== JSON.stringify(behind), "order change shows in the canvas");
+const before = await pixel(40, 60);
+await rows.nth(0).locator(".eye").click();
+await settle();
+check(JSON.stringify(await pixel(40, 60)) !== JSON.stringify(before), "hiding the fill changes the canvas");
+await rows.nth(0).locator(".eye").click();
+
+// Blending: a sky blue fill over the gold preset, first multiplied, then screened.
 await page.locator("textarea").fill("完全に\n理解した");
-await tab("なし");
-await tab("透過");
-await shot("01-packed");
-console.log("packed (no outline):", await canvasInfo());
-
-await page.getByRole("tab", { name: /極太見出し/ }).click();
-await shot("11-font-dela");
-await page.getByRole("tab", { name: /明朝/ }).click();
-await shot("12-font-mincho");
-await tab("比率を保つ");
-await shot("13-keep-aspect");
-await tab("行ごとに引き伸ばし");
-await page.getByRole("tab", { name: /太ゴシック/ }).click();
-
-await tab("二重");
-await shot("02-outline-double");
-console.log("double outline:", await canvasInfo());
-
-await tab("一重");
-await shot("03-transparent");
-console.log("transparent corner alpha:", (await canvasInfo()).cornerAlpha);
-
-await tab("グラデーション");
-await slider("向き", 45);
-await tab("全体");
-await shot("04-gradient");
-
-await tab("金属");
 await tab("金");
-await slider("向き", 90);
-await tab("行ごと");
-await tab("二重");
-await color("色", "#3a2200");
-await color("色", "#ffffff", 1);
-await shot("05-metal-gold");
-await tab("銀");
-await shot("05-metal-silver");
+await rows.nth(0).click();
+await button("＋塗り");
+await color("色", "#4aa6dc");
+await settle();
+const flat = await pixel(128, 64);
+await blend("乗算");
+await settle();
+const multiplied = await pixel(128, 64);
+await panelWithPreview("04-blend-multiply");
+await blend("スクリーン");
+await settle();
+const screened = await pixel(128, 64);
+await panelWithPreview("05-blend-screen");
+await blend("オーバーレイ");
+await stage("06-blend-overlay");
+console.log("pixel at (128, 64): normal", flat, "multiply", multiplied, "screen", screened);
+check(multiplied[2]! < 220 && screened[2]! > multiplied[2]!, "multiply darkens and screen lightens");
 
-await tab("一重");
-await color("色", "#ffffff");
-await tab("虹");
-await slider("向き", 0);
-await tab("全体");
-await shot("06-rainbow");
+// Opacity: the same layer back to normal at 40 %.
+await blend("通常");
+await slider("不透明度", 40);
+await panelWithPreview("07-opacity-40");
+check((await rows.nth(0).locator(".meta").innerText()).includes("40%"), "the row shows the lowered opacity");
 
-await slider("回転", -20);
-await shot("07-rotation");
-await slider("回転", 0);
-
-await tab("塗る");
-await color("背景色", "#fff3d6");
-await shot("08-background");
-await tab("透過");
-
-await tab("金属");
-await tab("金");
-await tab("行ごと");
-await tab("二重");
-await color("色", "#3a2200");
-await settle(page);
-await page.locator("section.tile", { hasText: "Slack Light" }).screenshot({ path: `${outDir}/09-preview-slack-discord.png` });
-await page.screenshot({ path: `${outDir}/10-full-page.png`, fullPage: true });
-
-const sizes: Record<string, number> = {};
-for (const size of ["128", "256"]) {
-  await tab(size);
-  await settle(page);
-  sizes[size] = await downloadSize();
+// Presets.
+for (const [name, file] of [["銀", "08-preset-silver"], ["虹", "09-preset-rainbow"], ["ネオン", "10-preset-neon"], ["ポップ", "11-preset-pop"]]) {
+  await tab(name!);
+  await stage(file!);
 }
-console.log("download bytes (gold, double outline):", sizes);
-await tab("256");
+await tab("金");
+await panelWithPreview("12-preset-gold");
+check((await names()) === "塗り,縁取り,縁取り,背景", "a preset replaces the whole stack");
 
-// A busy case: five dense lines, rainbow fill, two outlines, a painted background.
+// Existing features: fonts, aspect, rotation, background.
+await page.getByRole("tab", { name: /極太見出し/ }).click();
+await stage("13-font-dela");
+await page.getByRole("tab", { name: /太ゴシック/ }).click();
+await tab("比率を保つ");
+await stage("14-keep-aspect");
+await tab("行ごとに引き伸ばし");
+await slider("回転", -20);
+await stage("15-rotation");
+check((await pixel(1, 1))[3] === 0, "transparent corner without background");
+await slider("回転", 0);
+await rows.last().locator(".eye").click();
+await rows.last().click();
+await color("色", "#fff3d6");
+await stage("16-background");
+check((await pixel(1, 1))[3] === 255, "background fills the corner");
+await rows.last().locator(".eye").click();
+
+// PNG sizes of representative stacks.
+const sizes: Record<string, number> = {};
+await page.locator("textarea").fill("最高\nです");
+for (const preset of ["標準", "金", "ネオン"]) {
+  await tab(preset);
+  for (const size of ["128px", "256px"]) {
+    await tab(size);
+    await settle();
+    sizes[`${preset} ${size}`] = await downloadSize();
+  }
+}
 await page.locator("textarea").fill("魑魅魍魎\n薔薇鬱蒼\n轟轟轟轟\n曖昧模糊\n驚天動地");
 await tab("虹");
-await tab("塗る");
-await settle(page);
-console.log("download bytes (busy 256):", await downloadSize());
+await rows.last().locator(".eye").click();
+await settle();
+sizes["busy rainbow with background 256px"] = await downloadSize();
+console.log("download bytes:", sizes);
+check(Object.values(sizes).every((n) => n <= 128 * 1024), "every PNG is at most 128 KB");
 
 await browser.close();

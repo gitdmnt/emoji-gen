@@ -1,10 +1,19 @@
-//! Canvas rendering of the emoji: per-line glyph masks, stretched into rows, outlined, painted, rotated.
+//! Canvas rendering of the emoji: per-line glyph masks stretched into rows, then the effect layers
+//! (fills, strokes, shadows) painted and composited back to front, then rotation and background.
 
 import { fontById, fontSpec, type Font } from "./fonts";
-import { alphaBounds, distanceTransform, layoutLines, rotationFit, type Box, type FitMode } from "./layout";
-
-export type PaintKind = "solid" | "linear" | "metal" | "rainbow";
-export type Outline = { width: number; color: string };
+import { alphaBounds, layoutLines, rotationFit, signedDistance, type Box, type FitMode } from "./layout";
+import {
+  compositeLayer,
+  DEFAULT_LAYERS,
+  drawOrder,
+  layerReach,
+  layerShape,
+  paintStops,
+  toBytes,
+  type Layer,
+  type Paint,
+} from "./layers";
 
 export type Settings = {
   text: string;
@@ -14,19 +23,8 @@ export type Settings = {
   /** Gap between lines, in pixels of a 256 canvas. */
   gap: number;
   rotation: number;
-  paint: PaintKind;
-  /** Whether gradients span the whole art or repeat on each line. */
-  perLine: boolean;
-  color: string;
-  from: string;
-  to: string;
-  metal: string;
-  angle: number;
-  /** Number of outlines drawn: none, `outline`, or `outline` wrapped in `outline2`. */
-  edges: 0 | 1 | 2;
-  /** Outline widths are in pixels of a 256 canvas. */
-  outline: Outline;
-  outline2: Outline;
+  /** Front first. */
+  layers: Layer[];
   bg: boolean;
   bgColor: string;
 };
@@ -38,26 +36,10 @@ export const DEFAULTS: Settings = {
   mode: "stretch",
   gap: 0,
   rotation: 0,
-  paint: "solid",
-  perLine: true,
-  color: "#ff9f1c",
-  from: "#ff4f8b",
-  to: "#ffc21c",
-  metal: "#e0a526",
-  angle: 90,
-  edges: 1,
-  outline: { width: 8, color: "#ffffff" },
-  outline2: { width: 6, color: "#2a8fd6" },
+  layers: DEFAULT_LAYERS,
   bg: false,
   bgColor: "#e9f6fd",
 };
-
-export const METALS = [
-  { label: "金", color: "#e0a526" },
-  { label: "銀", color: "#a9b4bf" },
-  { label: "銅", color: "#c26a3a" },
-  { label: "ローズ", color: "#e59a92" },
-];
 
 /** Font size of the offscreen line drawing; large so stretched glyphs stay sharp. */
 const MEASURE_PX = 320;
@@ -109,62 +91,42 @@ function gradient(ctx: CanvasRenderingContext2D, r: Box, deg: number, stops: [nu
   return g;
 }
 
-function hexRgb(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-/** `hex` moved toward white (t > 0) or black (t < 0). */
-function shade(hex: string, t: number): string {
-  const target = t > 0 ? 255 : 0;
-  const k = Math.abs(t);
-  const [r, g, b] = hexRgb(hex).map((v) => Math.round(v + (target - v) * k));
-  return `rgb(${r} ${g} ${b})`;
-}
-
-/** Polished metal: bright top, a hard horizon band in the middle, reflected light at the bottom. */
-function metalStops(base: string): [number, string][] {
-  return [
-    [0, shade(base, -0.1)],
-    [0.15, shade(base, 0.2)],
-    [0.42, shade(base, 0.75)],
-    [0.5, shade(base, 0.25)],
-    [0.502, shade(base, -0.5)],
-    [0.6, shade(base, -0.3)],
-    [0.85, shade(base, 0.1)],
-    [1, shade(base, 0.45)],
-  ];
-}
-
-function rainbowStops(): [number, string][] {
-  return Array.from({ length: 13 }, (_, i) => [i / 12, `hsl(${i * 30} 95% 58%)`]);
-}
-
-function paintStyle(ctx: CanvasRenderingContext2D, s: Settings, r: Box): string | CanvasGradient {
-  switch (s.paint) {
-    case "solid":
-      return s.color;
-    case "linear":
-      return gradient(ctx, r, s.angle, [[0, s.from], [1, s.to]]);
-    case "metal":
-      return gradient(ctx, r, s.angle, metalStops(s.metal));
-    case "rainbow":
-      return gradient(ctx, r, s.angle, rainbowStops());
+/** RGBA bytes of `p` over the whole canvas; each line's gradient spans its rect and owns the band of rows around it. */
+function paintPixels(p: Paint, size: number, rects: Box[], whole: Box): Uint8ClampedArray {
+  const [, ctx] = canvas2d(size);
+  if (p.kind === "solid") {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(0, 0, size, size);
+  } else {
+    const parts = p.perLine ? rects : [whole];
+    parts.forEach((r, i) => {
+      const top = i === 0 ? 0 : (parts[i - 1]!.y + parts[i - 1]!.h + r.y) / 2;
+      const next = parts[i + 1];
+      const bottom = next ? (r.y + r.h + next.y) / 2 : size;
+      ctx.fillStyle = gradient(ctx, r, p.angle, paintStops(p));
+      ctx.fillRect(0, Math.floor(top), size, Math.ceil(bottom) - Math.floor(top));
+    });
   }
+  return ctx.getImageData(0, 0, size, size).data;
 }
 
-/** Layer of `color` covering every pixel within `radius` of the mask (anti-aliased edge). */
-function outlineLayer(dist: Float32Array, size: number, radius: number, color: string): HTMLCanvasElement {
-  const [c, ctx] = canvas2d(size);
-  const img = ctx.createImageData(size, size);
-  const [r, g, b] = hexRgb(color);
-  for (let i = 0; i < dist.length; i++) {
-    const a = Math.min(1, Math.max(0, radius + 0.5 - dist[i]!));
-    if (a === 0) continue;
-    img.data.set([r, g, b, Math.round(a * 255)], i * 4);
-  }
-  ctx.putImageData(img, 0, 0);
-  return c;
+/** `shape` moved by (dx, dy) and blurred with a canvas shadow of `blur` pixels. */
+function shiftBlur(shape: Float32Array, size: number, dx: number, dy: number, blur: number): Float32Array {
+  const [src, sctx] = canvas2d(size);
+  const img = sctx.createImageData(size, size);
+  for (let i = 0; i < shape.length; i++) img.data[i * 4 + 3] = Math.round(shape[i]! * 255);
+  sctx.putImageData(img, 0, 0);
+  const [, ctx] = canvas2d(size);
+  // Draw the shape off canvas and keep only its shadow, which works where `ctx.filter` does not.
+  ctx.shadowColor = "#000";
+  ctx.shadowBlur = blur;
+  ctx.shadowOffsetX = dx + size * 2;
+  ctx.shadowOffsetY = dy;
+  ctx.drawImage(src, -size * 2, 0);
+  const data = ctx.getImageData(0, 0, size, size).data;
+  const out = new Float32Array(shape.length);
+  for (let i = 0; i < out.length; i++) out[i] = data[i * 4 + 3]! / 255;
+  return out;
 }
 
 /** Renders `s` into `out`, resizing it to the chosen size. */
@@ -177,30 +139,21 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
     .map((t) => measureLine(t, font))
     .filter((l): l is Line => l !== null);
 
-  const w1 = s.edges >= 1 ? s.outline.width * unit : 0;
-  const w2 = s.edges >= 2 ? s.outline2.width * unit : 0;
-  const reach = w1 + w2;
-  const inset = reach;
+  const layers = drawOrder(s.layers);
+  const inset = Math.max(0, ...layers.map(layerReach)) * unit;
   const rects = layoutLines(lines.map((l) => l.box), size, s.mode, inset, s.gap * unit);
 
-  const [mask, mctx] = canvas2d(size);
+  const [, mctx] = canvas2d(size);
   mctx.imageSmoothingQuality = "high";
   lines.forEach((l, i) => {
     const r = rects[i]!;
     mctx.drawImage(l.canvas, l.box.x, l.box.y, l.box.w, l.box.h, r.x, r.y, r.w, r.h);
   });
+  const maskData = mctx.getImageData(0, 0, size, size).data;
+  const mask = new Float32Array(size * size);
+  for (let i = 0; i < mask.length; i++) mask[i] = maskData[i * 4 + 3]! / 255;
+  const sd = layers.some((l) => l.type !== "fill") ? signedDistance(mask, size, size) : null;
 
-  const [art, actx] = canvas2d(size);
-  if (reach > 0) {
-    const alpha = mctx.getImageData(0, 0, size, size).data;
-    const inside = new Uint8Array(size * size);
-    for (let i = 0; i < inside.length; i++) inside[i] = alpha[i * 4 + 3]! >= 128 ? 1 : 0;
-    const dist = distanceTransform(inside, size, size);
-    if (w2 > 0) actx.drawImage(outlineLayer(dist, size, reach, s.outline2.color), 0, 0);
-    if (w1 > 0) actx.drawImage(outlineLayer(dist, size, w1, s.outline.color), 0, 0);
-  }
-
-  const [fill, fctx] = canvas2d(size);
   const whole = rects.length
     ? (() => {
         const x = Math.min(...rects.map((r) => r.x)), y = rects[0]!.y;
@@ -208,13 +161,17 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
         return { x, y, w: Math.max(...rects.map((r) => r.x + r.w)) - x, h: last.y + last.h - y };
       })()
     : { x: 0, y: 0, w: size, h: size };
-  for (const r of s.perLine && s.paint !== "solid" ? rects : [whole]) {
-    fctx.fillStyle = paintStyle(fctx, s, r);
-    fctx.fillRect(r.x, r.y, r.w, r.h);
+
+  const acc = new Float32Array(size * size * 4);
+  for (const l of layers) {
+    let shape = layerShape(l, mask, sd, unit);
+    if (l.type === "shadow") shape = shiftBlur(shape, size, l.dx * unit, l.dy * unit, l.blur * unit);
+    compositeLayer(acc, paintPixels(l.paint, size, rects, whole), shape, l.opacity / 100, l.blend);
   }
-  fctx.globalCompositeOperation = "destination-in";
-  fctx.drawImage(mask, 0, 0);
-  actx.drawImage(fill, 0, 0);
+  const [art, actx] = canvas2d(size);
+  const img = actx.createImageData(size, size);
+  img.data.set(toBytes(acc));
+  actx.putImageData(img, 0, 0);
 
   out.width = out.height = size;
   const ctx = out.getContext("2d")!;
