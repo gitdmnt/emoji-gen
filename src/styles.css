@@ -268,13 +268,42 @@ textarea:focus {
   font: 12px var(--mono);
 }
 
-input[type="color"] {
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row > .color-preview {
   width: 40px;
   height: 28px;
-  padding: 0 2px;
   border: 2px solid var(--line);
   border-radius: 6px;
-  background: var(--white);
+}
+
+.color-channel input[type="range"] {
+  appearance: none;
+  height: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.color-channel input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 20px;
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+  background: white;
+  cursor: pointer;
+}
+
+.color-channel input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 16px;
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+  background: white;
   cursor: pointer;
 }
 

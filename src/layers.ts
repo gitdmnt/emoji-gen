@@ -95,6 +95,7 @@ function numbered(layers: Layer[]): Layer[] {
 
 /** Layers are listed in the order they apply: the first one acts on the bare glyphs. */
 export const PRESETS: { name: string; layers: Layer[] }[] = [
+  { name: "単色", layers: numbered([makeLayer("fill")]) },
   {
     name: "標準",
     layers: numbered([

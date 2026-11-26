@@ -186,8 +186,17 @@ describe("reach and presets", () => {
     expect(stackReach([makeLayer("shadow", { width: 2, dx: 3, dy: -5, blur: 4 }), stroke({ width: 3 })])).toBe(11);
   });
 
+  test("the default preset is a single solid fill before standard", () => {
+    expect(PRESETS[0]!.name).toBe("単色");
+    expect(PRESETS[1]!.name).toBe("標準");
+    expect(PRESETS[0]!.layers).toHaveLength(1);
+    expect(PRESETS[0]!.layers[0]!.type).toBe("fill");
+    expect(PRESETS[0]!.layers[0]!.paint.kind).toBe("solid");
+  });
+
   test("presets reach as far as they did when every stroke was measured from the glyphs", () => {
     expect(PRESETS.map((p) => [p.name, stackReach(p.layers)])).toEqual([
+      ["単色", 0],
       ["標準", 12],
       ["金", 10],
       ["銀", 10],
