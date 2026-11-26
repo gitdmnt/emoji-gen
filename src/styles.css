@@ -85,9 +85,8 @@ aside {
   }
 
   aside {
+    position: static;
     order: -1;
-    top: 0;
-    z-index: 1;
     flex-direction: row;
     flex-wrap: wrap;
   }
@@ -203,7 +202,8 @@ textarea:focus {
 .stage {
   align-self: center;
   width: 260px;
-  height: 260px;
+  max-width: calc(100% - 24px);
+  aspect-ratio: 1;
   border: 2px solid var(--line);
   border-radius: 8px;
   background: repeating-conic-gradient(#e9eef2 0 25%, #ffffff 0 50%) 0 0 / 16px 16px;
@@ -211,8 +211,8 @@ textarea:focus {
 
 .stage canvas {
   display: block;
-  width: 256px;
-  height: 256px;
+  width: 100%;
+  height: 100%;
 }
 
 .download {

@@ -133,3 +133,25 @@ test("alignment is saved, restored, and reflected in canvas and PNG with whitesp
     return ctx.getImageData(0, 0, copy.width, copy.height).data.every((v, i) => v === original[i]);
   })).toBe(true);
 });
+
+test("responsive preview does not cover the editor", async () => {
+  for (const width of [280, 320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 700 });
+    await page.locator("textarea").scrollIntoViewIfNeeded();
+    const layout = await page.evaluate(() => {
+      const textarea = document.querySelector("textarea")!;
+      const rect = textarea.getBoundingClientRect();
+      const stage = document.querySelector(".stage")!.getBoundingClientRect();
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        asidePosition: getComputedStyle(document.querySelector("aside")!).position,
+        textareaHit: document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === textarea,
+        stageRight: stage.right,
+      };
+    });
+    expect(layout.pageWidth).toBe(width);
+    expect(layout.asidePosition).toBe(width <= 860 ? "static" : "sticky");
+    expect(layout.textareaHit).toBe(true);
+    expect(layout.stageRight).toBeLessThanOrEqual(width);
+  }
+});
