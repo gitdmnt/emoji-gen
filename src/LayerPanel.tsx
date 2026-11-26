@@ -1,5 +1,5 @@
-//! The appearance panel: presets, the layer list (front first, background fixed at the bottom), and the
-//! properties of the selected layer.
+//! The appearance panel: presets, the layer list (numbered in the order the layers apply, background fixed at
+//! the bottom), and the properties of the selected layer.
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { produce, unwrap, type SetStoreFunction } from "solid-js/store";
@@ -72,7 +72,7 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
 
   const insert = (layer: Layer) => {
     const ls = plain();
-    const at = Math.max(0, index());
+    const at = index() < 0 ? ls.length : index() + 1;
     layer.id = freshId(ls);
     ls.splice(at, 0, layer);
     set("layers", ls);
@@ -125,10 +125,10 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
         </For>
         <span class="spacer" />
         <Show when={current()}>
-          <button aria-label="前へ" disabled={index() === 0} onClick={() => move(index(), index() - 1)}>
+          <button aria-label="先に" disabled={index() === 0} onClick={() => move(index(), index() - 1)}>
             ↑
           </button>
-          <button aria-label="後ろへ" disabled={index() === s().layers.length - 1} onClick={() => move(index(), index() + 1)}>
+          <button aria-label="後に" disabled={index() === s().layers.length - 1} onClick={() => move(index(), index() + 1)}>
             ↓
           </button>
           <button onClick={() => insert({ ...structuredClone(unwrap(current()!)) })}>複製</button>
@@ -155,6 +155,7 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
                 setDropId(null);
               }}
             >
+              <span class="step">{i() + 1}</span>
               <Eye on={l.visible} onClick={() => set("layers", i(), "visible", (v) => !v)} />
               <span class={`swatch ${l.type}`} style={{ background: paintCss(l.paint) }} />
               <span class="name">{TYPE_LABEL[l.type]}</span>
@@ -169,6 +170,7 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
           )}
         </For>
         <li classList={{ hidden: !s().bg }} aria-selected={selected() === "bg"} onClick={() => setSelected("bg")}>
+          <span class="step" />
           <Eye on={s().bg} onClick={() => set("bg", (v) => !v)} />
           <span class="swatch fill" style={{ background: s().bgColor }} />
           <span class="name">背景</span>

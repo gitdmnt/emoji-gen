@@ -1,19 +1,10 @@
-//! Canvas rendering of the emoji: per-line glyph masks stretched into rows, then the effect layers
-//! (fills, strokes, shadows) painted and composited back to front, then rotation and background.
+//! Canvas rendering of the emoji: per-line glyph masks stretched into rows, then the effect layers applied
+//! in list order (see applyLayers), then rotation and background.
 
 import { fontById, fontSpec, type Font } from "./fonts";
-import { alphaBounds, layoutLines, rotationFit, signedDistance, type Box, type FitMode } from "./layout";
-import {
-  compositeLayer,
-  DEFAULT_LAYERS,
-  drawOrder,
-  layerReach,
-  layerShape,
-  paintStops,
-  toBytes,
-  type Layer,
-  type Paint,
-} from "./layers";
+import { alphaBounds, layoutLines, rotationFit, type Box, type FitMode } from "./layout";
+import { applyLayers, DEFAULT_LAYERS, paintStops, stackReach, toBytes, type Layer, type Paint } from "./layers";
+import { metalPixels } from "./metal";
 
 export type Settings = {
   text: string;
@@ -23,7 +14,7 @@ export type Settings = {
   /** Gap between lines, in pixels of a 256 canvas. */
   gap: number;
   rotation: number;
-  /** Front first. */
+  /** In the order they apply. */
   layers: Layer[];
   bg: boolean;
   bgColor: string;
@@ -91,21 +82,46 @@ function gradient(ctx: CanvasRenderingContext2D, r: Box, deg: number, stops: [nu
   return g;
 }
 
-/** RGBA bytes of `p` over the whole canvas; each line's gradient spans its rect and owns the band of rows around it. */
-function paintPixels(p: Paint, size: number, rects: Box[], whole: Box): Uint8ClampedArray {
+/** The rows each part of a gradient owns: a line's gradient spans its rect and the band of rows around it. */
+function gradientParts(p: Paint, size: number, rects: Box[], whole: Box): { r: Box; top: number; bottom: number }[] {
+  const parts = p.perLine ? rects : [whole];
+  return parts.map((r, i) => {
+    const prev = parts[i - 1], next = parts[i + 1];
+    const top = prev ? Math.floor((prev.y + prev.h + r.y) / 2) : 0;
+    const bottom = next ? Math.ceil((r.y + r.h + next.y) / 2) : size;
+    return { r, top, bottom };
+  });
+}
+
+/** Each pixel's position (0 to 1) along the gradient of `p`, matching `gradient` above. */
+function gradientT(p: Paint, size: number, rects: Box[], whole: Box): Float32Array {
+  const t = new Float32Array(size * size);
+  const a = (p.angle * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  for (const { r, top, bottom } of gradientParts(p, size, rects, whole)) {
+    const span = Math.abs(cos) * r.w + Math.abs(sin) * r.h || 1;
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    for (let y = Math.max(0, top); y < Math.min(size, bottom); y++)
+      for (let x = 0; x < size; x++) t[y * size + x] = ((x + 0.5 - cx) * cos + (y + 0.5 - cy) * sin) / span + 0.5;
+  }
+  return t;
+}
+
+/** RGBA bytes of `p` over the whole canvas, for a layer covering `shape`. */
+function paintPixels(p: Paint, size: number, unit: number, rects: Box[], whole: Box, shape: Float32Array): Uint8ClampedArray {
+  if (p.kind === "metal") {
+    const a = (p.angle * Math.PI) / 180;
+    return metalPixels(p.metal, shape, gradientT(p, size, rects, whole), [Math.cos(a), Math.sin(a)], size, size, unit);
+  }
   const [, ctx] = canvas2d(size);
   if (p.kind === "solid") {
     ctx.fillStyle = p.color;
     ctx.fillRect(0, 0, size, size);
   } else {
-    const parts = p.perLine ? rects : [whole];
-    parts.forEach((r, i) => {
-      const top = i === 0 ? 0 : (parts[i - 1]!.y + parts[i - 1]!.h + r.y) / 2;
-      const next = parts[i + 1];
-      const bottom = next ? (r.y + r.h + next.y) / 2 : size;
+    for (const { r, top, bottom } of gradientParts(p, size, rects, whole)) {
       ctx.fillStyle = gradient(ctx, r, p.angle, paintStops(p));
-      ctx.fillRect(0, Math.floor(top), size, Math.ceil(bottom) - Math.floor(top));
-    });
+      ctx.fillRect(0, top, size, bottom - top);
+    }
   }
   return ctx.getImageData(0, 0, size, size).data;
 }
@@ -139,8 +155,7 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
     .map((t) => measureLine(t, font))
     .filter((l): l is Line => l !== null);
 
-  const layers = drawOrder(s.layers);
-  const inset = Math.max(0, ...layers.map(layerReach)) * unit;
+  const inset = stackReach(s.layers) * unit;
   const rects = layoutLines(lines.map((l) => l.box), size, s.mode, inset, s.gap * unit);
 
   const [, mctx] = canvas2d(size);
@@ -152,7 +167,6 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
   const maskData = mctx.getImageData(0, 0, size, size).data;
   const mask = new Float32Array(size * size);
   for (let i = 0; i < mask.length; i++) mask[i] = maskData[i * 4 + 3]! / 255;
-  const sd = layers.some((l) => l.type !== "fill") ? signedDistance(mask, size, size) : null;
 
   const whole = rects.length
     ? (() => {
@@ -162,12 +176,10 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
       })()
     : { x: 0, y: 0, w: size, h: size };
 
-  const acc = new Float32Array(size * size * 4);
-  for (const l of layers) {
-    let shape = layerShape(l, mask, sd, unit);
-    if (l.type === "shadow") shape = shiftBlur(shape, size, l.dx * unit, l.dy * unit, l.blur * unit);
-    compositeLayer(acc, paintPixels(l.paint, size, rects, whole), shape, l.opacity / 100, l.blend);
-  }
+  const acc = applyLayers(s.layers, mask, size, size, unit, {
+    paint: (l, shape) => paintPixels(l.paint, size, unit, rects, whole, shape),
+    shadow: (shape, dx, dy, blur) => shiftBlur(shape, size, dx, dy, blur),
+  });
   const [art, actx] = canvas2d(size);
   const img = actx.createImageData(size, size);
   img.data.set(toBytes(acc));

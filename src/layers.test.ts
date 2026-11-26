@@ -1,54 +1,58 @@
 import { describe, expect, test } from "bun:test";
 import {
+  applyLayers,
   band,
   BLEND_FNS,
   BLENDS,
   compositeLayer,
-  drawOrder,
-  layerReach,
-  layerShape,
   makeLayer,
   PRESETS,
   sameLayers,
+  stackReach,
   toBytes,
   type Blend,
   type Layer,
+  type Painter,
 } from "./layers";
 import { signedDistance } from "./layout";
 
 /** One pixel of solid paint. */
 const px = (r: number, g: number, b: number) => new Uint8ClampedArray([r, g, b, 255]);
-const full = new Float32Array([1]);
 
-/** Composites `layers` (front first, each with its own one-pixel paint) and returns the RGBA bytes. */
+/** A painter for `n` pixels that paints every layer in its own solid colour and leaves shadows unmoved. */
+function solidPainter(n: number, colours: Map<Layer, Uint8ClampedArray>): Painter {
+  return {
+    paint: (l) => {
+      const out = new Uint8ClampedArray(n * 4);
+      for (let i = 0; i < n; i++) out.set(colours.get(l)!, i * 4);
+      return out;
+    },
+    shadow: (shape) => shape,
+  };
+}
+
+/** Applies `layers` (each with its own paint) to a single fully covered pixel and returns the RGBA bytes. */
 function stack(layers: [Layer, Uint8ClampedArray][]): number[] {
-  const acc = new Float32Array(4);
-  const paints = new Map(layers.map(([l, p]) => [l, p]));
-  for (const l of drawOrder(layers.map(([l]) => l))) compositeLayer(acc, paints.get(l)!, full, l.opacity / 100, l.blend);
+  const acc = applyLayers(layers.map(([l]) => l), new Float32Array([1]), 1, 1, 1, solidPainter(1, new Map(layers)));
   return [...toBytes(acc)];
 }
 
 const fill = (over: Partial<Layer> = {}) => makeLayer("fill", over);
 
-describe("drawOrder", () => {
-  test("draws the back of the list first and skips hidden or fully transparent layers", () => {
-    const a = fill({ id: 1 }), b = fill({ id: 2, visible: false }), c = fill({ id: 3 }), d = fill({ id: 4, opacity: 0 });
-    expect(drawOrder([a, b, c, d]).map((l) => l.id)).toEqual([3, 1]);
-  });
-
-  test("the front layer covers the ones behind it", () => {
-    expect(stack([[fill(), px(255, 0, 0)], [fill(), px(0, 0, 255)]])).toEqual([255, 0, 0, 255]);
-    expect(stack([[fill({ visible: false }), px(255, 0, 0)], [fill(), px(0, 0, 255)]])).toEqual([0, 0, 255, 255]);
+describe("applyLayers order", () => {
+  test("a later fill covers an earlier one; hidden layers are skipped", () => {
+    expect(stack([[fill(), px(255, 0, 0)], [fill(), px(0, 0, 255)]])).toEqual([0, 0, 255, 255]);
+    expect(stack([[fill(), px(255, 0, 0)], [fill({ visible: false }), px(0, 0, 255)]])).toEqual([255, 0, 0, 255]);
   });
 });
 
 describe("compositeLayer", () => {
   const grey = px(128, 128, 128);
   const orange = px(255, 160, 32);
-  const over = (blend: Blend, opacity = 100) => stack([[fill({ blend, opacity }), grey], [fill(), orange]]);
+  const over = (blend: Blend, opacity = 100) => stack([[fill(), orange], [fill({ blend, opacity }), grey]]);
 
   test("opacity mixes with what is behind", () => {
-    expect(stack([[fill({ opacity: 50 }), px(100, 100, 100)], [fill(), px(200, 0, 50)]])).toEqual([150, 50, 75, 255]);
+    expect(stack([[fill(), px(200, 0, 50)], [fill({ opacity: 50 }), px(100, 100, 100)]])).toEqual([150, 50, 75, 255]);
   });
 
   test("multiply darkens and screen lightens the backdrop", () => {
@@ -67,8 +71,8 @@ describe("compositeLayer", () => {
 
   test("a half transparent backdrop is blended in proportion", () => {
     const acc = new Float32Array(4);
-    compositeLayer(acc, px(0, 0, 0), full, 0.5, "normal");
-    compositeLayer(acc, px(255, 255, 255), full, 1, "multiply");
+    compositeLayer(acc, px(0, 0, 0), new Float32Array([1]), 0.5, "normal");
+    compositeLayer(acc, px(255, 255, 255), new Float32Array([1]), 1, "multiply");
     // Half of the result is the plain white source (no backdrop there), half is white times black.
     expect([...toBytes(acc)]).toEqual([128, 128, 128, 255]);
   });
@@ -85,46 +89,112 @@ describe("compositeLayer", () => {
   });
 });
 
-describe("layer shapes", () => {
+describe("applyLayers shapes", () => {
   // A 9 x 1 strip with the glyph in the middle three pixels.
-  const mask = new Float32Array([0, 0, 0, 1, 1, 1, 0, 0, 0]);
-  const sd = signedDistance(mask, 9, 1);
+  const glyph = new Float32Array([0, 0, 0, 1, 1, 1, 0, 0, 0]);
+  const white = px(255, 255, 255), black = px(0, 0, 0);
+
+  /** RGBA of each pixel of the strip, as "w" (white), "k" (black), "." (empty) or the raw bytes. */
+  function strip(layers: [Layer, Uint8ClampedArray][], mask = glyph, painter?: Partial<Painter>): string[] {
+    const acc = applyLayers(layers.map(([l]) => l), mask, mask.length, 1, 1, {
+      ...solidPainter(mask.length, new Map(layers)),
+      ...painter,
+    });
+    const bytes = toBytes(acc);
+    return Array.from({ length: mask.length }, (_, i) => {
+      const [r, g, b, a] = bytes.slice(i * 4, i * 4 + 4);
+      if (a === 0) return ".";
+      if (a === 255 && r === 255 && g === 255 && b === 255) return "w";
+      if (a === 255 && r === 0 && g === 0 && b === 0) return "k";
+      return `${r},${g},${b},${a}`;
+    });
+  }
 
   test("signed distance is negative inside and positive outside", () => {
-    expect([...sd]).toEqual([2.5, 1.5, 0.5, -0.5, -1.5, -0.5, 0.5, 1.5, 2.5]);
+    expect([...signedDistance(glyph, 9, 1)]).toEqual([2.5, 1.5, 0.5, -0.5, -1.5, -0.5, 0.5, 1.5, 2.5]);
   });
 
-  test("an outside stroke covers its width beyond the edge and one pixel under it", () => {
-    const s = layerShape(makeLayer("stroke", { width: 2 }), mask, sd, 1);
-    expect([...s]).toEqual([0, 1, 1, 1, 0, 1, 1, 1, 0]);
+  test("a white fill and then a black outside stroke give white letters with a black outline", () => {
+    const layers: [Layer, Uint8ClampedArray][] = [[fill(), white], [makeLayer("stroke", { width: 2 }), black]];
+    expect(strip(layers).join("")).toBe(".kkwwwkk.");
   });
 
-  test("an inside stroke stays within the glyph", () => {
-    const s = layerShape(makeLayer("stroke", { width: 1, position: "inside" }), mask, sd, 1);
-    expect([...s]).toEqual([0, 0, 0, 1, 0, 1, 0, 0, 0]);
+  test("a black outside stroke and then a white fill paint the outline white too", () => {
+    const layers: [Layer, Uint8ClampedArray][] = [[makeLayer("stroke", { width: 2 }), black], [fill(), white]];
+    expect(strip(layers).join("")).toBe(".wwwwwww.");
   });
 
-  test("a centred stroke straddles the edge", () => {
-    expect([...band(sd, -1, 1)]).toEqual([0, 0, 1, 1, 0, 1, 1, 0, 0]);
+  test("outside strokes stack outward", () => {
+    const blue = px(0, 0, 255);
+    const layers: [Layer, Uint8ClampedArray][] = [
+      [fill(), white],
+      [makeLayer("stroke", { width: 1 }), black],
+      [makeLayer("stroke", { width: 1 }), blue],
+    ];
+    expect(strip(layers)).toEqual([".", "0,0,255,255", "k", "w", "w", "w", "k", "0,0,255,255", "."]);
   });
 
-  test("a fill is the glyph mask itself", () => {
-    expect(layerShape(makeLayer("fill"), mask, sd, 1)).toBe(mask);
+  test("an inside stroke stays within the shape and does not grow it", () => {
+    const layers: [Layer, Uint8ClampedArray][] = [
+      [fill(), white],
+      [makeLayer("stroke", { width: 1, position: "inside" }), black],
+      [makeLayer("stroke", { width: 1 }), px(0, 0, 255)],
+    ];
+    const blue = "0,0,255,255";
+    expect(strip(layers)).toEqual([".", ".", blue, "k", "w", "k", blue, ".", "."]);
   });
 
-  test("stroke widths scale with the canvas", () => {
-    const s = layerShape(makeLayer("stroke", { width: 4 }), mask, sd, 0.5);
-    expect([...s]).toEqual([0, 1, 1, 1, 0, 1, 1, 1, 0]);
+  test("a centred stroke straddles the edge and grows the shape by half its width", () => {
+    expect([...band(signedDistance(glyph, 9, 1), -1, 1)]).toEqual([0, 0, 1, 1, 0, 1, 1, 0, 0]);
+    const layers: [Layer, Uint8ClampedArray][] = [[fill(), white], [makeLayer("stroke", { width: 2, position: "center" }), black], [fill(), white]];
+    expect(strip(layers).join("")).toBe("..wwwww..");
+  });
+
+  test("an anti-aliased edge leaves no gap between a fill and the outline added after it", () => {
+    const soft = new Float32Array([0, 0, 0.5, 1, 1, 1, 0.5, 0, 0]);
+    const out = strip([[fill(), white], [makeLayer("stroke", { width: 2 }), black]], soft);
+    expect(out[2]).toBe("128,128,128,255");
+  });
+
+  test("an outside stroke does not show through a translucent fill", () => {
+    const out = strip([[fill({ opacity: 50 }), white], [makeLayer("stroke", { width: 1 }), black]]);
+    expect(out.join(" ")).toBe(". . k 255,255,255,128 255,255,255,128 255,255,255,128 k . .");
+  });
+
+  test("a shadow is cast from the shape so far, stays behind it and is not painted by later fills", () => {
+    const grey = px(128, 128, 128);
+    // Shadows move one pixel to the right.
+    const shift = { shadow: (shape: Float32Array) => new Float32Array([0, ...shape.slice(0, -1)]) };
+    const layers: [Layer, Uint8ClampedArray][] = [
+      [makeLayer("stroke", { width: 1 }), black],
+      [makeLayer("shadow", { width: 0 }), grey],
+      [fill(), white],
+    ];
+    expect(strip(layers, glyph, shift)).toEqual([".", ".", "w", "w", "w", "w", "w", "128,128,128,255", "."]);
   });
 });
 
 describe("reach and presets", () => {
-  test("only outward parts of visible layers need room", () => {
-    expect(layerReach(makeLayer("stroke", { width: 8 }))).toBe(8);
-    expect(layerReach(makeLayer("stroke", { width: 8, position: "center" }))).toBe(4);
-    expect(layerReach(makeLayer("stroke", { width: 8, position: "inside" }))).toBe(0);
-    expect(layerReach(makeLayer("stroke", { width: 8, visible: false }))).toBe(0);
-    expect(layerReach(makeLayer("shadow", { width: 2, dx: 3, dy: -5, blur: 4 }))).toBe(11);
+  test("outside strokes add up and shadows reach from the shape they are cast from", () => {
+    const stroke = (over: Partial<Layer>) => makeLayer("stroke", over);
+    expect(stackReach([stroke({ width: 8 })])).toBe(8);
+    expect(stackReach([stroke({ width: 8, position: "center" })])).toBe(4);
+    expect(stackReach([stroke({ width: 8, position: "inside" })])).toBe(0);
+    expect(stackReach([stroke({ width: 8, visible: false })])).toBe(0);
+    expect(stackReach([stroke({ width: 3 }), stroke({ width: 4 })])).toBe(7);
+    expect(stackReach([stroke({ width: 3 }), makeLayer("shadow", { width: 2, dx: 3, dy: -5, blur: 4 })])).toBe(14);
+    expect(stackReach([makeLayer("shadow", { width: 2, dx: 3, dy: -5, blur: 4 }), stroke({ width: 3 })])).toBe(11);
+  });
+
+  test("presets reach as far as they did when every stroke was measured from the glyphs", () => {
+    expect(PRESETS.map((p) => [p.name, stackReach(p.layers)])).toEqual([
+      ["標準", 12],
+      ["金", 10],
+      ["銀", 10],
+      ["虹", 11],
+      ["ネオン", 20],
+      ["ポップ", 13],
+    ]);
   });
 
   test("presets have unique ids and compare equal regardless of ids", () => {

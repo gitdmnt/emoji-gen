@@ -1,5 +1,8 @@
-//! Effect layers: their data, presets, and the pure pixel math that turns a stack into one image
-//! (coverage of each layer's shape, then W3C separable blending and source-over compositing).
+//! Effect layers: their data, presets, and the pure pixel math that applies a stack in list order. Each layer
+//! acts on the shape built so far: a fill paints it, an outside stroke grows it, a shadow is cast from it.
+
+import { metalStops } from "./metal";
+import { signedDistance } from "./layout";
 
 export type PaintKind = "solid" | "linear" | "metal" | "rainbow";
 
@@ -42,7 +45,7 @@ export type Layer = {
   opacity: number;
   blend: Blend;
   paint: Paint;
-  /** Stroke width, or how far a shadow spreads beyond the glyphs. */
+  /** Stroke width, or how far a shadow spreads beyond the shape it is cast from. */
   width: number;
   position: StrokePosition;
   dx: number;
@@ -90,14 +93,14 @@ function numbered(layers: Layer[]): Layer[] {
   return layers.map((l, i) => ({ ...l, id: i + 1 }));
 }
 
-/** Layer stacks are listed front first, as in a layer panel. */
+/** Layers are listed in the order they apply: the first one acts on the bare glyphs. */
 export const PRESETS: { name: string; layers: Layer[] }[] = [
   {
     name: "標準",
     layers: numbered([
       makeLayer("fill"),
       makeLayer("stroke", { width: 7 }),
-      makeLayer("stroke", { width: 12, paint: { color: "#2a8fd6" } }),
+      makeLayer("stroke", { width: 5, paint: { color: "#2a8fd6" } }),
     ]),
   },
   {
@@ -105,7 +108,7 @@ export const PRESETS: { name: string; layers: Layer[] }[] = [
     layers: numbered([
       makeLayer("fill", { paint: { kind: "metal", metal: "#e0a526" } }),
       makeLayer("stroke", { width: 4, paint: { color: "#3a2200" } }),
-      makeLayer("stroke", { width: 10 }),
+      makeLayer("stroke", { width: 6 }),
     ]),
   },
   {
@@ -113,7 +116,7 @@ export const PRESETS: { name: string; layers: Layer[] }[] = [
     layers: numbered([
       makeLayer("fill", { paint: { kind: "metal", metal: "#a9b4bf" } }),
       makeLayer("stroke", { width: 4, paint: { color: "#26303a" } }),
-      makeLayer("stroke", { width: 10 }),
+      makeLayer("stroke", { width: 6 }),
     ]),
   },
   {
@@ -121,7 +124,7 @@ export const PRESETS: { name: string; layers: Layer[] }[] = [
     layers: numbered([
       makeLayer("fill", { paint: { kind: "rainbow", angle: 0, perLine: false } }),
       makeLayer("stroke", { width: 7 }),
-      makeLayer("stroke", { width: 11, paint: { color: "#1f3242" } }),
+      makeLayer("stroke", { width: 4, paint: { color: "#1f3242" } }),
     ]),
   },
   {
@@ -129,7 +132,7 @@ export const PRESETS: { name: string; layers: Layer[] }[] = [
     layers: numbered([
       makeLayer("fill", { paint: { color: "#ffffff" } }),
       makeLayer("stroke", { width: 5, paint: { color: "#3fd2ff" } }),
-      makeLayer("shadow", { width: 6, dx: 0, dy: 0, blur: 14, paint: { color: "#3fd2ff" } }),
+      makeLayer("shadow", { width: 1, dx: 0, dy: 0, blur: 14, paint: { color: "#3fd2ff" } }),
     ]),
   },
   {
@@ -137,7 +140,7 @@ export const PRESETS: { name: string; layers: Layer[] }[] = [
     layers: numbered([
       makeLayer("fill", { paint: { kind: "linear", from: "#ff4f8b", to: "#ffc21c" } }),
       makeLayer("stroke", { width: 7 }),
-      makeLayer("shadow", { width: 7, dx: 5, dy: 6, blur: 0, opacity: 80, paint: { color: "#2a8fd6" } }),
+      makeLayer("shadow", { width: 0, dx: 5, dy: 6, blur: 0, opacity: 80, paint: { color: "#2a8fd6" } }),
     ]),
   },
 ];
@@ -150,30 +153,20 @@ export function sameLayers(a: Layer[], b: Layer[]): boolean {
   return strip(a) === strip(b);
 }
 
-/** How far beyond the glyphs a layer reaches, in pixels of a 256 canvas. */
-export function layerReach(l: Layer): number {
-  if (!l.visible) return 0;
-  if (l.type === "stroke") return l.position === "outside" ? l.width : l.position === "center" ? l.width / 2 : 0;
-  if (l.type === "shadow") return l.width + l.blur + Math.max(Math.abs(l.dx), Math.abs(l.dy));
-  return 0;
+/** How far beyond the glyphs the stack reaches, in pixels of a 256 canvas: outside strokes add up, shadows reach from the shape they are cast from. */
+export function stackReach(layers: Layer[]): number {
+  let grown = 0;
+  let reach = 0;
+  for (const l of layers) {
+    if (!l.visible) continue;
+    if (l.type === "stroke") grown += l.position === "outside" ? l.width : l.position === "center" ? l.width / 2 : 0;
+    const own = l.type === "shadow" ? l.width + l.blur + Math.max(Math.abs(l.dx), Math.abs(l.dy)) : 0;
+    reach = Math.max(reach, grown + own);
+  }
+  return reach;
 }
 
-// Paint stops, shared by the canvas renderer and the CSS swatches.
-
-function hexRgb(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-}
-
-/** `hex` moved toward white (t > 0) or black (t < 0). */
-function shade(hex: string, t: number): string {
-  const target = t > 0 ? 255 : 0;
-  const k = Math.abs(t);
-  const [r, g, b] = hexRgb(hex).map((v) => Math.round(v + (target - v) * k));
-  return `rgb(${r} ${g} ${b})`;
-}
-
-/** Colour stops of `p` along its gradient (a single stop for solid paint). */
+/** Colour stops of `p` along its gradient (a single stop for solid paint); shared by the canvas and the CSS swatches. */
 export function paintStops(p: Paint): [number, string][] {
   switch (p.kind) {
     case "solid":
@@ -181,23 +174,13 @@ export function paintStops(p: Paint): [number, string][] {
     case "linear":
       return [[0, p.from], [1, p.to]];
     case "metal":
-      // Polished metal: bright top, a hard horizon band in the middle, reflected light at the bottom.
-      return [
-        [0, shade(p.metal, -0.1)],
-        [0.15, shade(p.metal, 0.2)],
-        [0.42, shade(p.metal, 0.75)],
-        [0.5, shade(p.metal, 0.25)],
-        [0.502, shade(p.metal, -0.5)],
-        [0.6, shade(p.metal, -0.3)],
-        [0.85, shade(p.metal, 0.1)],
-        [1, shade(p.metal, 0.45)],
-      ];
+      return metalStops(p.metal);
     case "rainbow":
       return Array.from({ length: 13 }, (_, i) => [i / 12, `hsl(${i * 30} 95% 58%)`]);
   }
 }
 
-// Pixel math. Coverage arrays hold 0 to 1 per pixel; `sd` is the signed distance to the glyph edge
+// Pixel math. Coverage arrays hold 0 to 1 per pixel; `sd` is the signed distance to a shape's edge
 // (negative inside, see signedDistance in layout.ts).
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -209,23 +192,11 @@ export function band(sd: Float32Array, a: number, b: number): Float32Array {
   return out;
 }
 
-/**
- * Coverage of a layer's shape before any blur or offset. `mask` is the anti-aliased glyph alpha, `unit` the
- * canvas size over 256. An outside stroke reaches one pixel under the glyph edge so a fill on top leaves no seam.
- */
-export function layerShape(l: Layer, mask: Float32Array, sd: Float32Array | null, unit: number): Float32Array {
-  if (l.type === "fill" || !sd) return mask;
-  const w = l.width * unit;
-  if (l.type === "shadow") {
-    const grown = band(sd, -Infinity, w);
-    for (let i = 0; i < grown.length; i++) grown[i] = Math.max(grown[i]!, mask[i]!);
-    return grown;
-  }
-  if (l.position === "outside") return band(sd, -1, w);
-  if (l.position === "center") return band(sd, -w / 2, w / 2);
-  const inner = band(sd, -w, Infinity);
-  for (let i = 0; i < inner.length; i++) inner[i] = inner[i]! * mask[i]!;
-  return inner;
+/** `shape` (whose signed distance is `sd`) grown outward by `w` pixels; never less than `shape` itself. */
+export function grow(shape: Float32Array, sd: Float32Array, w: number): Float32Array {
+  const out = band(sd, -Infinity, w);
+  for (let i = 0; i < out.length; i++) out[i] = Math.max(out[i]!, shape[i]!);
+  return out;
 }
 
 type BlendFn = (cb: number, cs: number) => number;
@@ -278,9 +249,78 @@ export function compositeLayer(
   }
 }
 
-/** Visible layers in drawing order: the back of the list first. */
-export function drawOrder(layers: Layer[]): Layer[] {
-  return layers.filter((l) => l.visible && l.opacity > 0).reverse();
+/** Adds a layer to `acc` where it lies beside, not over, what is already there (the ring an outside stroke adds). */
+function addBeside(acc: Float32Array, paint: Uint8ClampedArray, shape: Float32Array, opacity: number): void {
+  for (let i = 0; i < shape.length; i++) {
+    const j = i * 4;
+    const as = (paint[j + 3]! / 255) * shape[i]! * opacity;
+    if (as <= 0) continue;
+    const k = Math.min(as, 1 - acc[j + 3]!);
+    for (let c = 0; c < 3; c++) acc[j + c] = acc[j + c]! + (paint[j + c]! / 255) * k;
+    acc[j + 3] = acc[j + 3]! + k;
+  }
+}
+
+/** What the canvas side supplies to `applyLayers`. */
+export type Painter = {
+  /** Straight RGBA bytes of `l`'s paint over the whole canvas; `shape` is what it will cover (metal shades by it). */
+  paint(l: Layer, shape: Float32Array): Uint8ClampedArray;
+  /** `shape` moved by (dx, dy) and blurred by `blur` pixels. */
+  shadow(shape: Float32Array, dx: number, dy: number, blur: number): Float32Array;
+};
+
+/**
+ * Applies the visible `layers` in list order to the glyph coverage `glyphs` and returns a premultiplied image.
+ * The shape starts as the glyphs. A fill paints the shape over the result so far; a stroke paints a ring
+ * inside the shape over the result and adds a ring outside it, which becomes part of the shape; a shadow is
+ * cast from the shape and goes behind everything, over earlier shadows. Opacity and blending apply where a
+ * layer meets the result so far. `unit` is the canvas size over 256.
+ */
+export function applyLayers(
+  layers: Layer[],
+  glyphs: Float32Array,
+  width: number,
+  height: number,
+  unit: number,
+  painter: Painter,
+): Float32Array {
+  let shape = glyphs;
+  let sd: Float32Array | null = null;
+  const dist = () => (sd ??= signedDistance(shape, width, height));
+  const front = new Float32Array(shape.length * 4);
+  const back = new Float32Array(shape.length * 4);
+  for (const l of layers) {
+    if (!l.visible) continue;
+    const opacity = l.opacity / 100;
+    const w = l.width * unit;
+    if (l.type === "fill") {
+      compositeLayer(front, painter.paint(l, shape), shape, opacity, l.blend);
+    } else if (l.type === "shadow") {
+      const cast = w > 0 ? grow(shape, dist(), w) : shape;
+      const blurred = painter.shadow(cast, l.dx * unit, l.dy * unit, l.blur * unit);
+      compositeLayer(back, painter.paint(l, blurred), blurred, opacity, l.blend);
+    } else {
+      const inner = l.position === "inside" ? w : l.position === "center" ? w / 2 : 0;
+      const outer = w - inner;
+      const within = band(dist(), -inner, Infinity);
+      for (let i = 0; i < within.length; i++) within[i] = inner > 0 ? within[i]! * shape[i]! : 0;
+      const grown = outer > 0 ? grow(shape, dist(), outer) : shape;
+      const ring = grown.map((g, i) => g - shape[i]!);
+      const paint = painter.paint(l, within.map((v, i) => v + ring[i]!));
+      compositeLayer(front, paint, within, opacity, l.blend);
+      addBeside(front, paint, ring, opacity);
+      if (grown !== shape) {
+        shape = grown;
+        sd = null;
+      }
+    }
+  }
+  // Shadows sit behind the shape.
+  for (let j = 0; j < front.length; j += 4) {
+    const k = 1 - front[j + 3]!;
+    for (let c = 0; c < 4; c++) front[j + c] = front[j + c]! + back[j + c]! * k;
+  }
+  return front;
 }
 
 /** Straight-alpha RGBA bytes of a premultiplied float image. */

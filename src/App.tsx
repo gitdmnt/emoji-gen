@@ -6,9 +6,15 @@ import { LayerPanel } from "./LayerPanel";
 import { makeLayer, type Layer } from "./layers";
 import { clearLineCache, DEFAULTS, render, type Settings } from "./render";
 
-const STORAGE_KEY = "emoji-gen:v2";
+const STORAGE_KEY = "emoji-gen:v3";
 /** Slack rejects custom emoji images above this size. */
 const LIMIT = 128 * 1024;
+
+/**
+ * Display sizes in chat, in CSS pixels: an emoji sent alone (Slack's jumbomoji; Discord shows 48), inside a line of
+ * text, and as a reaction. Slack and Discord agree on the last two.
+ */
+const SIZES = { alone: 32, inline: 22, reaction: 16 };
 
 /** Chat backgrounds for the size check: Slack's light message pane and its dark theme. */
 const SURFACES = [
@@ -121,9 +127,15 @@ export default function App() {
             <div class="surfaces">
               <For each={SURFACES}>
                 {(c) => (
-                  <p class="surface" style={{ background: c.bg, color: c.text }}>
-                    お疲れさま {img(22)} {img(48)}
-                  </p>
+                  <div class="surface" style={{ background: c.bg, color: c.text }}>
+                    <p>{img(SIZES.alone)}</p>
+                    <p>
+                      了解です {img(SIZES.inline)} 確認します
+                    </p>
+                    <span class="reaction">
+                      {img(SIZES.reaction)}1
+                    </span>
+                  </div>
                 )}
               </For>
             </div>
