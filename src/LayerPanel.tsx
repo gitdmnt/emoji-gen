@@ -1,5 +1,4 @@
-//! The appearance panel: presets, the layer list (numbered in the order the layers apply, background fixed at
-//! the bottom), and the properties of the selected layer.
+//! The appearance panel: presets, the layer list, and the selected layer's properties.
 
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { produce, unwrap, type SetStoreFunction } from "solid-js/store";
@@ -125,10 +124,10 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
         </For>
         <span class="spacer" />
         <Show when={current()}>
-          <button aria-label="先に" disabled={index() === 0} onClick={() => move(index(), index() - 1)}>
+          <button aria-label="上へ" disabled={index() === s().layers.length - 1} onClick={() => move(index(), index() + 1)}>
             ↑
           </button>
-          <button aria-label="後に" disabled={index() === s().layers.length - 1} onClick={() => move(index(), index() + 1)}>
+          <button aria-label="下へ" disabled={index() === 0} onClick={() => move(index(), index() - 1)}>
             ↓
           </button>
           <button onClick={() => insert({ ...structuredClone(unwrap(current()!)) })}>複製</button>
@@ -136,7 +135,7 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
         </Show>
       </div>
       <ul class="layers">
-        <For each={s().layers}>
+        <For each={s().layers.slice().reverse()}>
           {(l, i) => (
             <li
               classList={{ hidden: !l.visible, drop: dropId() === l.id && dragId() !== l.id }}
@@ -150,13 +149,13 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
               onDrop={(e) => {
                 e.preventDefault();
                 const from = s().layers.findIndex((x) => x.id === dragId());
-                if (from >= 0) move(from, i());
+                if (from >= 0) move(from, s().layers.length - 1 - i());
                 setDragId(null);
                 setDropId(null);
               }}
             >
-              <span class="step">{i() + 1}</span>
-              <Eye on={l.visible} onClick={() => set("layers", i(), "visible", (v) => !v)} />
+              <span class="step">{s().layers.length - i()}</span>
+              <Eye on={l.visible} onClick={() => set("layers", s().layers.length - 1 - i(), "visible", (v) => !v)} />
               <span class={`swatch ${l.type}`} style={{ background: paintCss(l.paint) }} />
               <span class="name">{TYPE_LABEL[l.type]}</span>
               <span class="meta">

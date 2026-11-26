@@ -101,32 +101,33 @@ await settle();
 await page.screenshot({ path: `${outDir}/01-full-page.png`, fullPage: true });
 await tile("3 layers").screenshot({ path: `${outDir}/02-layer-panel.png` });
 await tile("5 preview").screenshot({ path: `${outDir}/03-preview-sizes.png` });
-check((await names()) === "塗り,縁取り,縁取り,背景", "default stack is a fill, then two strokes");
+check((await names()) === "縁取り,縁取り,塗り,背景", "default stack shows later layers above earlier layers");
+check((await rows.locator(".step").allInnerTexts()).join(",") === "3,2,1,", "step numbers show application order from bottom to top");
 const previewSizes = await page.locator(".surface").first().locator("img").evaluateAll((els) => els.map((e) => (e as HTMLImageElement).width));
 check(JSON.stringify(previewSizes) === "[32,22,16]", `preview shows the emoji alone, in a line and as a reaction ${previewSizes}`);
 
 // List operations on the default stack.
 await rows.nth(1).click();
 await button("複製");
-check((await names()) === "塗り,縁取り,縁取り,縁取り,背景", "duplicate adds a copy after the selected layer");
+check((await names()) === "縁取り,縁取り,縁取り,塗り,背景", "duplicate adds a copy above the selected layer");
 await button("削除");
-check((await names()) === "塗り,縁取り,縁取り,背景", "delete removes the selected layer");
-await rows.nth(0).click();
+check((await names()) === "縁取り,縁取り,塗り,背景", "delete removes the selected layer");
+await rows.nth(2).click();
 await settle();
 const front = await snapshot();
-await button("↓");
-check((await names()) === "縁取り,塗り,縁取り,背景", "moving the fill down applies it after the first stroke");
+await button("↑");
+check((await names()) === "縁取り,塗り,縁取り,背景", "moving the fill up applies it after the first stroke");
 await settle();
 check((await snapshot()) !== front, "order change shows in the canvas");
-await rows.nth(1).dragTo(rows.nth(0));
-check((await names()) === "塗り,縁取り,縁取り,背景", "dragging a row moves it to the drop target");
+await rows.nth(1).dragTo(rows.nth(2));
+check((await names()) === "縁取り,縁取り,塗り,背景", "dragging a row moves it to the drop target");
 await settle();
 check((await snapshot()) === front, "dragging back restores the first picture");
 const before = await pixel(40, 60);
-await rows.nth(0).locator(".eye").click();
+await rows.nth(2).locator(".eye").click();
 await settle();
 check(JSON.stringify(await pixel(40, 60)) !== JSON.stringify(before), "hiding the fill changes the canvas");
-await rows.nth(0).locator(".eye").click();
+await rows.nth(2).locator(".eye").click();
 
 // Order: a white fill and a black outline, applied one way round and then the other.
 /** Counts of opaque white and opaque black pixels in the output canvas. */
@@ -142,22 +143,29 @@ const whiteBlack = () =>
     return { white, black };
   });
 await tab("標準");
-await rows.nth(2).click();
-await button("削除");
 await rows.nth(0).click();
-await color("色", "#ffffff");
+await button("削除");
 await rows.nth(1).click();
+await color("色", "#ffffff");
+await rows.nth(0).click();
 await color("色", "#000000");
 await slider("太さ", 6);
 // A sky blue background, so white on white stays visible in the shots.
 await rows.last().locator(".eye").click();
 await rows.last().click();
 await color("色", "#4aa6dc");
-await rows.nth(1).click();
+await rows.nth(0).click();
 await panelWithPreview("04-order-fill-then-stroke");
 const fillFirst = await whiteBlack();
-await button("↑");
-check((await names()) === "縁取り,塗り,背景", "the stroke now applies first");
+const savedStack = await page.evaluate(() => localStorage.getItem("emoji-gen:v3"));
+const savedPicture = await snapshot();
+await page.reload();
+await settle();
+check((await page.evaluate(() => localStorage.getItem("emoji-gen:v3"))) === savedStack && (await snapshot()) === savedPicture, "saved settings retain their order and rendered appearance on reload");
+check((await names()) === "縁取り,塗り,背景", "saved settings display the later stroke above the fill");
+await rows.nth(0).click();
+await button("↓");
+check((await names()) === "塗り,縁取り,背景", "the stroke now applies first");
 await panelWithPreview("05-order-stroke-then-fill");
 const strokeFirst = await whiteBlack();
 console.log("opaque white and black pixels: fill then stroke", fillFirst, "stroke then fill", strokeFirst);
@@ -171,7 +179,7 @@ check(strokeFirst.white >= fillFirst.white + fillFirst.black, "stroke then fill:
 // Blending: a sky blue fill applied after the gold fill, first multiplied, then screened.
 await page.locator("textarea").fill("完全に\n理解した");
 await tab("金");
-await rows.nth(0).click();
+await rows.nth(2).click();
 await button("＋塗り");
 await color("色", "#4aa6dc");
 await settle();
@@ -195,6 +203,14 @@ await slider("不透明度", 40);
 await panelWithPreview("09-opacity-40");
 check((await page.locator('.layers li[aria-selected="true"] .meta').innerText()).includes("40%"), "the row shows the lowered opacity");
 
+for (const name of ["標準", "金", "銀", "虹", "ネオン", "ポップ"]) {
+  await tab(name);
+  await settle();
+  const picture = await snapshot();
+  await page.reload();
+  await settle();
+  check((await snapshot()) === picture && await page.getByRole("tab", { name, exact: true }).first().getAttribute("aria-selected") === "true", `${name} preset retains its appearance and selection on reload`);
+}
 // Presets.
 for (const [name, file] of [["銀", "10-preset-silver"], ["虹", "11-preset-rainbow"], ["ネオン", "12-preset-neon"], ["ポップ", "13-preset-pop"]]) {
   await tab(name!);
@@ -202,7 +218,7 @@ for (const [name, file] of [["銀", "10-preset-silver"], ["虹", "11-preset-rain
 }
 await tab("金");
 await panelWithPreview("14-preset-gold");
-check((await names()) === "塗り,縁取り,縁取り,背景", "a preset replaces the whole stack");
+check((await names()) === "縁取り,縁取り,塗り,背景", "a preset replaces the whole stack");
 
 // Metal: the gold and silver presets beside the shots taken before the metal paint was reworked.
 await page.locator("textarea").fill("最高\nです");
