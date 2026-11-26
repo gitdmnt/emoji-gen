@@ -35,16 +35,16 @@ export const DEFAULTS: Settings = {
 /** Font size of the offscreen line drawing; large so stretched glyphs stay sharp. */
 const MEASURE_PX = 320;
 
-type Line = { canvas: HTMLCanvasElement; box: Box };
-const lineCache = new Map<string, Line | null>();
+type Line = { canvas: HTMLCanvasElement; box: Box | null; width: number };
+const lineCache = new Map<string, Line>();
 
 /** Forgets measured lines; call after a web font finishes loading. */
 export function clearLineCache(): void {
   lineCache.clear();
 }
 
-/** Draws `text` once at MEASURE_PX and finds the box of its opaque pixels. */
-function measureLine(text: string, font: Font): Line | null {
+/** Measures a line's glyphs and whitespace. */
+function measureLine(text: string, font: Font): Line {
   const key = `${font.id}\n${text}`;
   const hit = lineCache.get(key);
   if (hit !== undefined) return hit;
@@ -52,14 +52,20 @@ function measureLine(text: string, font: Font): Line | null {
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.font = fontSpec(font, MEASURE_PX);
   const pad = MEASURE_PX / 2;
-  canvas.width = Math.min(16000, Math.ceil(ctx.measureText(text).width + 2 * pad));
+  const width = ctx.measureText(text).width;
+  canvas.width = Math.min(16000, Math.ceil(width + 2 * pad));
   canvas.height = MEASURE_PX * 2;
   ctx.font = fontSpec(font, MEASURE_PX);
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#000";
   ctx.fillText(text, pad, MEASURE_PX);
-  const box = alphaBounds(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
-  const line = box && { canvas, box };
+  const ink = alphaBounds(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+  const leading = ctx.measureText(text.match(/^[ \u3000]*/)?.[0] ?? "").width;
+  const trailing = ctx.measureText(text.match(/[ \u3000]*$/)?.[0] ?? "").width;
+  const left = ink ? Math.max(0, ink.x - leading) : pad;
+  const right = ink ? Math.min(canvas.width, ink.x + ink.w + trailing) : Math.min(canvas.width, pad + width);
+  const box = ink && { ...ink, x: left, w: right - left };
+  const line = { canvas, box, width: Math.max(1, right - left) };
   if (lineCache.size > 64) lineCache.clear();
   lineCache.set(key, line);
   return line;
@@ -150,18 +156,20 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
   const size = s.size;
   const unit = size / 256;
   const font = fontById(s.font);
-  const lines = s.text
-    .split("\n")
-    .map((t) => measureLine(t, font))
-    .filter((l): l is Line => l !== null);
+  const lines = s.text.split("\n").map((t) => measureLine(t, font));
 
   const inset = stackReach(s.layers) * unit;
-  const boxes = sharedLineBounds(lines.map((l) => l.box));
+  const visible = lines.flatMap((l) => l.box ? [l.box] : []);
+  const vertical = sharedLineBounds(visible)[0] ?? { x: 0, y: 0, w: 1, h: MEASURE_PX };
+  const boxes = lines.map((l) => l.box
+    ? { ...l.box, y: vertical.y, h: vertical.h }
+    : { x: 0, y: vertical.y, w: l.width, h: vertical.h });
   const rects = layoutLines(boxes, size, s.mode, inset, s.gap * unit);
 
   const [, mctx] = canvas2d(size);
   mctx.imageSmoothingQuality = "high";
   lines.forEach((l, i) => {
+    if (!l.box) return;
     const r = rects[i]!;
     const b = boxes[i]!;
     mctx.drawImage(l.canvas, b.x, b.y, b.w, b.h, r.x, r.y, r.w, r.h);
