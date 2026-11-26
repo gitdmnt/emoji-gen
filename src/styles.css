@@ -283,6 +283,7 @@ textarea:focus {
 
 .color-plane {
   position: relative;
+  width: 50%;
   aspect-ratio: 1;
   border: 1px solid var(--line);
   border-radius: 6px;
