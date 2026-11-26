@@ -24,7 +24,14 @@ body {
   margin: 0;
 }
 
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 header {
+  width: 100%;
   max-width: 874px;
   margin: 0 auto;
   padding: 10px 14px 0;
@@ -48,8 +55,9 @@ footer {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 16px;
+  width: 100%;
   max-width: 874px;
-  margin: 0 auto;
+  margin: auto auto 0;
   padding: 0 14px 14px;
   color: var(--muted);
   font-size: 12px;
