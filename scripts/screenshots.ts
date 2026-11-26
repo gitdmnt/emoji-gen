@@ -58,14 +58,18 @@ async function stage(name: string) {
   await page.locator(".stage").screenshot({ path: `${outDir}/${name}.png` });
 }
 
-/** The layer tile beside the preview tile, so settings and result show together. */
+/** The layer tile with the sticky preview beside it, so settings and result show together. */
 async function panelWithPreview(name: string) {
+  const layers = tile("3 layers");
+  // A laptop-height window, so the page scrolls far enough for the layer tile to reach the top.
+  await page.setViewportSize({ width: 1440, height: 700 });
+  await layers.evaluate((el) => window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - 10));
   await settle();
-  const a = (await tile("3 layers").boundingBox())!;
+  const a = (await layers.boundingBox())!;
   const b = (await tile("5 preview").boundingBox())!;
-  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-  const w = Math.max(a.x + a.width, b.x + b.width) - x, h = Math.max(a.y + a.height, b.y + b.height) - y;
-  await page.screenshot({ path: `${outDir}/${name}.png`, clip: { x: x - 2, y: y - 2, width: w + 4, height: h + 4 } });
+  const h = Math.max(a.height, b.y + b.height - a.y);
+  await page.screenshot({ path: `${outDir}/${name}.png`, clip: { x: a.x - 2, y: a.y - 2, width: b.x + b.width - a.x + 4, height: h + 4 } });
+  await page.setViewportSize({ width: 1440, height: 1000 });
 }
 
 /** RGBA of the output canvas at (x, y) in 256 space. */
@@ -75,6 +79,9 @@ async function pixel(x: number, y: number): Promise<number[]> {
     return [...c.getContext("2d")!.getImageData(Math.floor(x! * k), Math.floor(y! * k), 1, 1).data];
   }, [x, y]);
 }
+
+/** The whole output canvas as a data URL, to tell whether anything changed. */
+const snapshot = () => page.locator(".stage canvas").evaluate((c: HTMLCanvasElement) => c.toDataURL());
 
 async function downloadSize(): Promise<number> {
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("link", { name: "PNG を保存" }).click()]);
@@ -101,13 +108,16 @@ check((await names()) === "塗り,縁取り,縁取り,縁取り,背景", "duplic
 await button("削除");
 check((await names()) === "塗り,縁取り,縁取り,背景", "delete removes the selected layer");
 await rows.nth(0).click();
+await settle();
+const front = await snapshot();
 await button("↓");
 check((await names()) === "縁取り,塗り,縁取り,背景", "move down sends the fill behind the first stroke");
-const behind = await pixel(128, 128);
+await settle();
+check((await snapshot()) !== front, "order change shows in the canvas");
 await rows.nth(1).dragTo(rows.nth(0));
 check((await names()) === "塗り,縁取り,縁取り,背景", "dragging a row moves it to the drop target");
 await settle();
-check(JSON.stringify(await pixel(128, 128)) !== JSON.stringify(behind), "order change shows in the canvas");
+check((await snapshot()) === front, "dragging back restores the first picture");
 const before = await pixel(40, 60);
 await rows.nth(0).locator(".eye").click();
 await settle();
