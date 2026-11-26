@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { alphaBounds, distanceTransform, layoutLines, rotationFit } from "./layout";
+import { alphaBounds, distanceTransform, layoutLines, rotationFit, sharedLineBounds } from "./layout";
 
 function rgba(width: number, height: number, opaque: [number, number][]): Uint8ClampedArray {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -21,6 +21,33 @@ describe("alphaBounds", () => {
 
   test("returns null for an empty image", () => {
     expect(alphaBounds(rgba(3, 3, []), 3, 3)).toBeNull();
+  });
+});
+
+describe("sharedLineBounds", () => {
+  test("keeps short glyphs at their original baseline position in every row", () => {
+    const boxes = [
+      { x: 10, y: 100, w: 200, h: 200 },
+      { x: 20, y: 190, w: 180, h: 20 },
+      { x: 15, y: 110, w: 190, h: 210 },
+    ];
+    const shared = sharedLineBounds(boxes);
+    expect(shared).toEqual([
+      { x: 10, y: 100, w: 200, h: 220 },
+      { x: 20, y: 100, w: 180, h: 220 },
+      { x: 15, y: 100, w: 190, h: 220 },
+    ]);
+    for (const mode of ["stretch", "keep"] as const) {
+      const rows = layoutLines(shared, 300, mode);
+      expect(rows[1]!.y - rows[0]!.y).toBeCloseTo(rows[2]!.y - rows[1]!.y);
+      expect((boxes[1]!.y - shared[1]!.y) / shared[1]!.h).toBeCloseTo(90 / 220);
+    }
+  });
+
+  test("leaves a single line unchanged and handles no lines", () => {
+    const box = { x: 1, y: 2, w: 3, h: 4 };
+    expect(sharedLineBounds([box])).toEqual([box]);
+    expect(sharedLineBounds([])).toEqual([]);
   });
 });
 

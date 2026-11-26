@@ -2,7 +2,7 @@
 //! in list order (see applyLayers), then rotation and background.
 
 import { fontById, fontSpec, type Font } from "./fonts";
-import { alphaBounds, layoutLines, rotationFit, type Box, type FitMode } from "./layout";
+import { alphaBounds, layoutLines, rotationFit, sharedLineBounds, type Box, type FitMode } from "./layout";
 import { applyLayers, DEFAULT_LAYERS, paintStops, stackReach, toBytes, type Layer, type Paint } from "./layers";
 import { metalPixels } from "./metal";
 
@@ -156,13 +156,15 @@ export function render(out: HTMLCanvasElement, s: Settings): void {
     .filter((l): l is Line => l !== null);
 
   const inset = stackReach(s.layers) * unit;
-  const rects = layoutLines(lines.map((l) => l.box), size, s.mode, inset, s.gap * unit);
+  const boxes = sharedLineBounds(lines.map((l) => l.box));
+  const rects = layoutLines(boxes, size, s.mode, inset, s.gap * unit);
 
   const [, mctx] = canvas2d(size);
   mctx.imageSmoothingQuality = "high";
   lines.forEach((l, i) => {
     const r = rects[i]!;
-    mctx.drawImage(l.canvas, l.box.x, l.box.y, l.box.w, l.box.h, r.x, r.y, r.w, r.h);
+    const b = boxes[i]!;
+    mctx.drawImage(l.canvas, b.x, b.y, b.w, b.h, r.x, r.y, r.w, r.h);
   });
   const maskData = mctx.getImageData(0, 0, size, size).data;
   const mask = new Float32Array(size * size);

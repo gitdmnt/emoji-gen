@@ -23,6 +23,14 @@ export function alphaBounds(data: Uint8ClampedArray, width: number, height: numb
   return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
 }
 
+/** Use a shared vertical crop so each line keeps its position relative to the same baseline. */
+export function sharedLineBounds(boxes: Box[]): Box[] {
+  if (!boxes.length) return [];
+  const y = Math.min(...boxes.map((b) => b.y));
+  const bottom = Math.max(...boxes.map((b) => b.y + b.h));
+  return boxes.map((b) => ({ ...b, y, h: bottom - y }));
+}
+
 /**
  * Target rects in a `size` square for lines whose glyph boxes are `boxes`, leaving `inset` on every side
  * (room for outlines) and `gap` between lines.
