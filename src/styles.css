@@ -283,7 +283,7 @@ textarea:focus {
 
 .color-plane {
   position: relative;
-  height: 140px;
+  aspect-ratio: 1;
   border: 1px solid var(--line);
   border-radius: 6px;
   background-image: linear-gradient(to top, black, transparent), linear-gradient(to right, white, transparent);
