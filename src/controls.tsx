@@ -1,7 +1,7 @@
 //! Small form controls shared by the panels.
 
 import { createEffect, createSignal, For, type JSX } from "solid-js";
-import { hexToHsl, hslToHex, type Hsl } from "./color";
+import { hexToHsv, hsvToHex, type Hsv } from "./color";
 
 export function Tabs<T extends string | number | boolean>(props: {
   value: T;
@@ -22,20 +22,26 @@ export function Tabs<T extends string | number | boolean>(props: {
 }
 
 export function Color(props: { label: string; value: string; onChange: (v: string) => void }) {
-  const [hsl, setHsl] = createSignal(hexToHsl(props.value));
+  const [hsv, setHsv] = createSignal(hexToHsv(props.value));
   let emitted = "";
   createEffect(() => {
     const value = props.value;
     if (value !== emitted) {
       emitted = "";
-      setHsl(hexToHsl(value));
+      setHsv(hexToHsv(value));
     }
   });
-  const change = (key: keyof Hsl, value: number) => {
-    const next = { ...hsl(), [key]: value };
-    setHsl(next);
-    emitted = hslToHex(next);
+  const change = (patch: Partial<Hsv>) => {
+    const next = { ...hsv(), ...patch };
+    setHsv(next);
+    emitted = hsvToHex(next);
     props.onChange(emitted);
+  };
+  const point = (e: PointerEvent) => {
+    const rect = e.currentTarget instanceof HTMLElement ? e.currentTarget.getBoundingClientRect() : null;
+    if (!rect) return;
+    change({ s: Math.max(0, Math.min(100, (e.clientX - rect.left) / rect.width * 100)),
+      v: Math.max(0, Math.min(100, (rect.bottom - e.clientY) / rect.height * 100)) });
   };
   return (
     <div class="color-picker">
@@ -55,19 +61,23 @@ export function Color(props: { label: string; value: string; onChange: (v: strin
           }}
         />
       </label>
-      <For each={[["h", "色相", 360], ["s", "彩度", 100], ["l", "明度", 100]] as const}>
-        {([key, label, max]) => (
-          <label class="row color-channel">
-            <span>{label}</span>
-            <input type="range" min="0" max={max} value={hsl()[key]} aria-label={`${props.label}の${label}`}
-              style={{ background: key === "h" ? "linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red)" :
-                key === "s" ? `linear-gradient(to right, hsl(${hsl().h} 0% ${hsl().l}%), hsl(${hsl().h} 100% ${hsl().l}%))` :
-                `linear-gradient(to right, black, hsl(${hsl().h} ${hsl().s}% 50%), white)` }}
-              onInput={(e) => change(key, e.currentTarget.valueAsNumber)} />
-            <output>{Math.round(hsl()[key])}{key === "h" ? "°" : "%"}</output>
-          </label>
-        )}
-      </For>
+      <div class="color-plane" role="application" tabIndex={0}
+        aria-label={`${props.label}の彩度 ${Math.round(hsv().s)}%、明度 ${Math.round(hsv().v)}%。矢印キーで調整`}
+        style={{ "background-color": `hsl(${hsv().h} 100% 50%)` }}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); point(e); }}
+        onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) point(e); }}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 10 : 1;
+          const delta: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+          const d = delta[e.key];
+          if (!d) return;
+          e.preventDefault();
+          change({ s: Math.max(0, Math.min(100, hsv().s + d[0])), v: Math.max(0, Math.min(100, hsv().v + d[1])) });
+        }}>
+        <span class="color-marker" style={{ left: `${hsv().s}%`, top: `${100 - hsv().v}%` }} />
+      </div>
+      <input class="color-hue" type="range" min="0" max="360" value={hsv().h}
+        aria-label={`${props.label}の色相`} onInput={(e) => change({ h: e.currentTarget.valueAsNumber })} />
     </div>
   );
 }

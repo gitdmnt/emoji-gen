@@ -24,3 +24,18 @@ export function hslToHex({ h, s, l }: Hsl): string {
   };
   return `#${channel(0)}${channel(8)}${channel(4)}`;
 }
+
+export type Hsv = { h: number; s: number; v: number };
+
+export function hexToHsv(hex: string): Hsv {
+  const { h, s, l } = hexToHsl(hex);
+  const lightness = l / 100;
+  const v = lightness + s / 100 * Math.min(lightness, 1 - lightness);
+  return { h, s: v === 0 ? 0 : 200 * (1 - lightness / v), v: v * 100 };
+}
+
+export function hsvToHex({ h, s, v }: Hsv): string {
+  const lightness = v / 100 * (1 - s / 200);
+  const saturation = lightness === 0 || lightness === 1 ? 0 : (v / 100 - lightness) / Math.min(lightness, 1 - lightness);
+  return hslToHex({ h, s: saturation * 100, l: lightness * 100 });
+}

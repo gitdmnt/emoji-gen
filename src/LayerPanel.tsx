@@ -106,7 +106,7 @@ export function LayerPanel(props: { s: Settings; set: SetStoreFunction<Settings>
   return (
     <>
       <div class="presets" role="tablist">
-        <For each={PRESETS}>
+        <For each={PRESETS.filter((p) => p.name !== "銀")}>
           {(p) => (
             <PresetButton
               name={p.name}

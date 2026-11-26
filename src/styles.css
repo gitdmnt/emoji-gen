@@ -281,14 +281,41 @@ textarea:focus {
   border-radius: 6px;
 }
 
-.color-channel input[type="range"] {
+.color-plane {
+  position: relative;
+  height: 140px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background-image: linear-gradient(to top, black, transparent), linear-gradient(to right, white, transparent);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-marker {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px black;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-hue {
+  width: 100%;
+  margin: 0;
+  background: linear-gradient(to right, red, yellow, lime, cyan, blue, magenta, red);
+}
+
+.color-hue {
   appearance: none;
   height: 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
 }
 
-.color-channel input[type="range"]::-webkit-slider-thumb {
+.color-hue::-webkit-slider-thumb {
   appearance: none;
   width: 16px;
   height: 20px;
@@ -298,7 +325,7 @@ textarea:focus {
   cursor: pointer;
 }
 
-.color-channel input[type="range"]::-moz-range-thumb {
+.color-hue::-moz-range-thumb {
   width: 12px;
   height: 16px;
   border: 2px solid var(--ink);
@@ -379,7 +406,7 @@ select {
 
 .presets {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -398,6 +425,8 @@ select {
 .presets canvas {
   width: 56px;
   height: 56px;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 .presets small {

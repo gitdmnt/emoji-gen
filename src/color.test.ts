@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hexToHsl, hslToHex } from "./color";
+import { hexToHsl, hslToHex, hexToHsv, hsvToHex } from "./color";
 
 describe("HSL colors", () => {
   test("converts primary colors and grayscale", () => {
@@ -13,6 +13,20 @@ describe("HSL colors", () => {
   test("round trips colors without losing precision", () => {
     for (const hex of ["#000000", "#ffffff", "#808080", "#ff9f1c", "#123456", "#ff00ff"]) {
       expect(hslToHex(hexToHsl(hex))).toBe(hex);
+    }
+  });
+});
+
+describe("HSV colors", () => {
+  test("converts the color plane corners and hue", () => {
+    expect(hsvToHex({ h: 120, s: 100, v: 100 })).toBe("#00ff00");
+    expect(hsvToHex({ h: 120, s: 0, v: 100 })).toBe("#ffffff");
+    expect(hsvToHex({ h: 120, s: 100, v: 0 })).toBe("#000000");
+    expect(hsvToHex({ h: 0, s: 50, v: 50 })).toBe("#804040");
+  });
+  test("round trips saved colors", () => {
+    for (const hex of ["#000000", "#ffffff", "#808080", "#a9b4bf", "#ff9f1c", "#123456", "#ff00ff"]) {
+      expect(hsvToHex(hexToHsv(hex))).toBe(hex);
     }
   });
 });
