@@ -21,6 +21,7 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
       - run: bun run deploy
         env:
           CLOUDFLARE_ACCOUNT_ID: b1b0eb0fb45095ab625360cacafbd3e9
